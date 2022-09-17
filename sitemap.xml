@@ -1,75 +1,75 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-        <loc>https://blog.wechat-daydream.ml/</loc>
+        <loc>https://wechat-daydream.ml/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/about/</loc>
+        <loc>https://wechat-daydream.ml/about/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/archive/</loc>
+        <loc>https://wechat-daydream.ml/archive/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/dark-tencent/</loc>
+        <loc>https://wechat-daydream.ml/dark-tencent/</loc>
         <lastmod>2016-01-02</lastmod>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/page/1/</loc>
+        <loc>https://wechat-daydream.ml/page/1/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/page/2/</loc>
+        <loc>https://wechat-daydream.ml/page/2/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/redis-network/</loc>
+        <loc>https://wechat-daydream.ml/redis-network/</loc>
         <lastmod>2016-01-10</lastmod>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/rust-rocks/</loc>
+        <loc>https://wechat-daydream.ml/rust-rocks/</loc>
         <lastmod>2016-01-06</lastmod>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/</loc>
+        <loc>https://wechat-daydream.ml/tags/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/best-programming-language/</loc>
+        <loc>https://wechat-daydream.ml/tags/best-programming-language/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/cache/</loc>
+        <loc>https://wechat-daydream.ml/tags/cache/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/chinese-big-company/</loc>
+        <loc>https://wechat-daydream.ml/tags/chinese-big-company/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/chinese-sweat-factory/</loc>
+        <loc>https://wechat-daydream.ml/tags/chinese-sweat-factory/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/dark/</loc>
+        <loc>https://wechat-daydream.ml/tags/dark/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/database/</loc>
+        <loc>https://wechat-daydream.ml/tags/database/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/e-han/</loc>
+        <loc>https://wechat-daydream.ml/tags/e-han/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/middleware/</loc>
+        <loc>https://wechat-daydream.ml/tags/middleware/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/multithreaded/</loc>
+        <loc>https://wechat-daydream.ml/tags/multithreaded/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/nosql/</loc>
+        <loc>https://wechat-daydream.ml/tags/nosql/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/redis/</loc>
+        <loc>https://wechat-daydream.ml/tags/redis/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/rust/</loc>
+        <loc>https://wechat-daydream.ml/tags/rust/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/system-programming/</loc>
+        <loc>https://wechat-daydream.ml/tags/system-programming/</loc>
     </url>
     <url>
-        <loc>https://blog.wechat-daydream.ml/tags/tencent/</loc>
+        <loc>https://wechat-daydream.ml/tags/tencent/</loc>
     </url>
 </urlset>

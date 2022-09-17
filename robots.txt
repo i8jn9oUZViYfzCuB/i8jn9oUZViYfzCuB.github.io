@@ -1,4 +1,4 @@
 User-agent: *
 Disallow:
 Allow: /
-Sitemap: https://blog.wechat-daydream.ml/sitemap.xml
+Sitemap: https://wechat-daydream.ml/sitemap.xml
