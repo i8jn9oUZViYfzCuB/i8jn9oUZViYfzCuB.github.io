@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title></title>
+    
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+    <meta name="robots" content="noodp"/>
+
+    <link rel="stylesheet" href="https://blog.wechat-daydream.ml/style.css">
+    <link rel="stylesheet" href="https://blog.wechat-daydream.ml/color/blue.css">
+
+    <link rel="stylesheet" href="https://blog.wechat-daydream.ml/font-hack.css">
+
+    </head>
+
+<body class="">
+<div class="container">
+    
+    <header class="header">
+        <div class="header__inner">
+            <div class="header__logo">
+                    
+                <a href="https://blog.wechat-daydream.ml" style="text-decoration: none;">
+                    <div class="logo">
+                      
+                            Dark Tencent (鹅厂暗无天日)
+                        
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        
+        
+                <nav class="menu">
+            <ul class="menu__inner">
+                <li class="active"><a href="https://blog.wechat-daydream.ml">blog</a></li>
+            
+                <li><a href="https://blog.wechat-daydream.ml/archive">archive</a></li>
+            
+                <li><a href="https://blog.wechat-daydream.ml/about">about</a></li>
+            
+                <li><a href="https://blog.wechat-daydream.ml/tags">tags</a></li>
+            </ul>
+        </nav>
+    
+    
+        
+    </header>
+    
+
+    <div class="content">
+        
+    <div class="post">
+        
+    <h1 class="post-title"><a href="https://blog.wechat-daydream.ml/redis-network/">Redis真的是多线程吗?</a></h1>
+    <div class="post-meta-inline">
+        
+    <span class="post-date">
+            2016-01-10
+        </span>
+
+    </div>
+
+    
+        <span class="post-tags-inline">
+                :: tags:&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/redis/">#Redis</a>&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/cache/">#Cache</a>&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/multithreaded/">#Multithreaded</a>&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/nosql/">#NoSQL</a>&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/database/">#Database</a>&nbsp;
+                <a class="post-tag" href="https://blog.wechat-daydream.ml/tags/middleware/">#Middleware</a></span>
+    
+
+        
+        <div class="post-content">
+            <blockquote>
+<ul>
+<li>Author: 鹅厂大叔</li>
+<li>Link: https://wechat-daydream.ml/redis-network/</li>
+<li>Contact: contact@wechat-daydream.ml</li>
+<li>转载须保留原文链接, 禁止一切商业形式用途, 谢谢合作!</li>
+<li>文章更新时间: 2020.05</li>
+</ul>
+</blockquote>
+<p>Redis v4.0, 开始引入多线程处理异步任务; Redis v6.0, 正式在网络模型中实现I/O多线程. 一切预示着, Redis终于迎来了多线程&quot;时代&quot;, 但Redis真的是&quot;多线程&quot;吗? <span id="continue-reading"></span> 在正式回答这个问题前, 先来回答几个简单问题.</p>
+<script>
+    document.oncopy = function(){ return false; };
+</script>
+<h2 id="wen-ti-yi-redisyou-duo-kuai">问题一: Redis有多快？</h2>
+<p>基于Redis官方的Benchmark, 通常在一台普通硬件配置的Linux机器上跑单个Redis实例, 处理简单命令, QPS可以达到8w+, 若使用管道批处理功能, QPS能达到100w. 仅从性能层面进行评判, Redis可以被称之为高性能缓存方案.</p>
+<h2 id="wen-ti-er-rediswei-shi-yao-zhe-yao-kuai">问题二: Redis为什么这么快?</h2>
+<p>要点参考如下:</p>
+<ul>
+<li><strong>内存缓存</strong>, 与其它刷写数据至磁盘的数据库相比, Redis纯内存操作有着天然的性能优势. </li>
+<li><strong>I/O多路复用</strong>, 基于epoll/select/kqueue等I/O多路复用技术, 吞吐量高. </li>
+<li><strong>单线程</strong>模型, 单线程效率不如多线程, 但从另一角度而言, 避免了多线程频繁上下文切换以及同步机制(如锁等)带来的开销. </li>
+<li>C语言实现</li>
+</ul>
+<h2 id="wen-ti-san-rediszui-chu-wei-shi-yao-xuan-ze-dan-xian-cheng">问题三: Redis最初为什么选择单线程?</h2>
+<p>Redis官方描述, 参考如下:</p>
+<blockquote>
+<p>It's not very frequent that CPU becomes your bottleneck with Redis, as usually Redisis either memory or network bound. For instance, using pipelining Redis running on an average Linux system can deliver even 1 million requests per second, so if your application mainly uses O(N) or O(log(N)) commands, it is hardly going to use too much CPU.</p>
+</blockquote>
+<p>简单翻译下, 主要意思在于, 对于Redis而言, CPU通常不会是瓶颈, 因为大多数请求并非CPU密集型, 而是I/O密集型. 如果不考虑RDB/AOF等持久化方案, 完全的纯内存操作, 执行速度非常快, 因而这部分操作通常不会是性能瓶颈, <strong>Redis真正的性能瓶颈在于网络I/O</strong>, 也就是客户端和服务端之间的网络传输延迟, 因此Redis选择了单线程的I/O多路复用来实现它的核心网络模型. </p>
+<p>实际上具体原因, 在于Redis单线程: </p>
+<h3 id="bi-mian-xian-cheng-shang-xia-wen-qie-huan-kai-xiao">避免线程上下文切换开销</h3>
+<p>多线程调度过程中必然涉及线程上下文切换, 而上下文的切换又涉及程序计数器、堆栈指针和程序状态字等一系列的寄存器置换、程序堆栈重置甚至是CPU高速缓存、TLB快表的汰换, 如果是进程内的多线程切换还好一些, 因为单一进程内多线程共享进程地址空间, 因此线程上下文比之进程上下文要小得多, 如果是跨进程调度, 则需要切换掉整个进程地址空间. <strong>如果是单线程则可以规避频繁的线程上下文切换开销</strong>.</p>
+<h3 id="bi-mian-tong-bu-ji-zhi-dai-lai-de-xing-neng-sun-hao">避免同步机制带来的性能损耗</h3>
+<p>若Redis选择多线程模型, 势必涉及到底层数据同步的问题, 则必然会引入某些同步机制, 比如锁, 而Redis不仅仅提供了简单的KV数据结构, 还有List、Set、Hash等其他丰富的数据结构, 而不同的数据结构对同步访问的加锁粒度又不尽相同, 可能会导致在操作数据过程中带来很多诸如加锁、解锁等开销, 增加程序复杂度的同时还会降低性能.</p>
+<h3 id="shi-xian-jian-dan-ke-wei-hu-xing-qiang">实现简单、可维护性强</h3>
+<p><img src="/images/redis/multithreaded-prog.jpg" alt="" /></p>
+<p>引入多线程必然会导致代码的复杂度上升和可维护性下降. 首先, 多线程的引入会使得程序不再保持代码逻辑上的串行性, 代码执行的顺序将变成不可预测的, 稍不注意就会导致程序出现各种并发编程的问题; 其次, 多线程模式也使得程序调试更加复杂和麻烦. </p>
+<p>如果Redis使用多线程, 那么所有底层数据结构均须线程安全, 这无疑又使得Redis的实现变得更加复杂. 总之, Redis选择单线程可以说是多方博弈之后的一种权衡: 在保证足够的性能之下, 使用单线程保持代码的简单和可维护性.</p>
+<h2 id="wen-ti-lai-liao-rediszhen-de-shi-dan-xian-cheng-ma">问题来了, Redis真的是单线程吗？</h2>
+<p>讨论这个问题前, 先明确<strong>单线程</strong>这个概念的边界: 它的覆盖范围是核心网络模型, 抑或是整个Redis？如果是前者, 那么答案是肯定的, 在Redis的v6.0版本正式引入多线程之前, 其网络模型一直是单线程模式的; 如果是后者, 那么答案则是否定的, Redis早在v4.0就已经引入了多线程.</p>
+<p>因而, 在讨论Redis的多线程之时, 有必要对Redis版本划出两个重要的节点: </p>
+<ul>
+<li>Redis v4.0(引入多线程处理异步任务)</li>
+<li>Redis v6.0(正式在网络模型中实现I/O多线程)</li>
+</ul>
+<h3 id="dan-xian-cheng-event-loop">单线程Event Loop</h3>
+<p>首先来剖析一下Redis的核心网络模型, 从Redis的v1.0到v6.0版本之前,Redis的核心网络模型一直是一个典型的Reactor模型: 利用epoll/select/kqueue等多路复用技术, 在单线程的Event Loop中不断去处理事件(客户端请求, 最后回写响应数据到客户端): </p>
+<p><img src="/images/redis/single-threaded-redis.png" alt="" /></p>
+<blockquote>
+<p>需要明确的几个概念</p>
+</blockquote>
+<ul>
+<li>
+<p><strong>client</strong>: 客户端对象,Redis是典型的C/S架构(Client &lt;—&gt; Server), 客户端通过socket与服务端建立网络通道然后发送请求命令, 服务端执行请求的命令并回复. Redis使用结构体 client 存储客户端的所有相关信息, 包括但不限于封装的套接字连接<code>*conn</code>, 当前选择的数据库指针<code>*db</code>, 读入缓冲区<code>querybuf</code>, 写出缓冲区<code>buf</code>, 写出数据链表<code>reply</code>等. </p>
+</li>
+<li>
+<p><strong>aeApiPoll</strong>: I/O多路复用API, 基于epoll_wait/select/kevent等系统调用的封装, 监听等待读写事件触发, 然后处理, 它是Event Loop中的核心函数, 是事件驱动得以运行的基础. </p>
+</li>
+<li>
+<p><strong>acceptTcpHandler</strong>: 连接应答处理器, 底层使用系统调用<code>accept</code>接受来自客户端的新连接, 并为新连接注册绑定命令读取处理器, 以备后续处理新的客户端TCP连接; 除了这个处理器, 还有对应的<code>acceptUnixHandler</code>负责处理Unix Domain Socket以及acceptTLSHandler负责处理TLS加密连接. </p>
+</li>
+<li>
+<p><strong>readQueryFromClient</strong>: 命令读取处理器, 解析并执行客户端的请求命令. </p>
+</li>
+<li>
+<p><strong>beforeSleep</strong>: Event Loop中进入<code>aeApiPoll</code>等待事件到来之前会执行的函数, 其中包含一些日常的任务, 比如把<code>client-&gt;buf</code>或者<code>client-&gt;reply</code>(后面会解释为什么这里需要两个缓冲区)中的响应写回到客户端, 持久化AOF缓冲区的数据到磁盘等, 相对应的还有一个<code>afterSleep</code>函数, 在<code>aeApiPoll</code>之后执行. </p>
+</li>
+<li>
+<p><strong>sendReplyToClient</strong>: 命令回复处理器, 当一次Event Loop之后写出缓冲区中还有数据残留, 则这个处理器会被注册绑定到相应的连接上, 等连接触发写就绪事件时, 它会将写出缓冲区剩余的数据回写到客户端</p>
+</li>
+</ul>
+<p>Redis内部实现了一个高性能的事件库--AE(基于epoll/select/kqueue/evport四种事件驱动技术, 实现Linux/MacOS/FreeBSD/Solaris多平台的高性能事件循环模型). Redis的核心网络模型正是构建于AE之上, 包括I/O多路复用、各类处理器的注册绑定, 均基于此.</p>
+<blockquote>
+<p>下面, 简单描述下客户端向Redis发起请求命令的工作原理</p>
+</blockquote>
+<ol>
+<li>
+<p>Redis服务器启动, 开启主线程事件循环(Event Loop), 注册<code>acceptTcpHandler</code>连接应答处理器到用户配置的监听端口对应的文件描述符, 等待新连接到来; </p>
+</li>
+<li>
+<p>客户端和服务端建立网络连接; </p>
+</li>
+<li>
+<p><code>acceptTcpHandler</code>被调用, 主线程使用AE的API将<code>readQueryFromClient</code>命令读取处理器绑定到新连接对应的文件描述符上, 并初始化一个client绑定这个客户端连接; </p>
+</li>
+<li>
+<p>客户端发送请求命令, 触发读就绪事件, 主线程调用<code>readQueryFromClient</code>通过socket读取客户端发送过来的命令存入<code>client-&gt;querybuf</code>读入缓冲区; </p>
+</li>
+<li>
+<p>接着调用<code>processInputBuffer</code>, 在其中使用<code>processInlineBuffer</code>或者<code>processMultibulkBuffer</code>根据Redis协议解析命令, 最后调用<code>processCommand</code>执行命令; </p>
+</li>
+<li>
+<p>根据请求命令的类型(SET, GET, DEL, EXEC 等), 分配相应的命令执行器去执行, 最后调用addReply函数族的一系列函数将响应数据写入到对应client的写出缓冲区: <code>client-&gt;buf</code>或者<code>client-&gt;reply</code>, <code>client-&gt;buf</code>是首选的写出缓冲区, 固定大小16KB, 一般来说可以缓冲足够多的响应数据, 但是如果客户端在时间窗口内需要响应的数据非常大, 那么则会自动切换到<code>client-&gt;reply</code>链表上去, 使用链表理论上能够保存无限大的数据(受限于机器的物理内存), 最后把client添加进一个 LIFO队列<code>clients_pending_write</code>; </p>
+</li>
+<li>
+<p>在Event Loop中, 主线程执行<code>beforeSleep</code> --&gt; <code>handleClientsWithPendingWrites</code>, 遍历<code>clients_pending_write</code>队列, 调用<code>writeToClient</code>把client的写出缓冲区里的数据回写到客户端, 如果写出缓冲区还有数据遗留, 则注册<code>sendReplyToClient</code>命令回复处理器到该连接的写就绪事件, 等待客户端可写时在事件循环中再继续回写残余的响应数据. </p>
+</li>
+</ol>
+<p>对于那些想利用多核优势提升性能的用户来说, Redis官方给出的解决方案也非常简单粗暴: 在同一个机器上多跑几个Redis实例. 事实上, 为了保证高可用, 线上业务一般不太可能会是单机模式, 更加常见的是利用Redis分布式集群和数据分片负载均衡来提升性能和保证高可用. </p>
+<h3 id="duo-xian-cheng-yi-bu-ren-wu">多线程异步任务</h3>
+<p>Redis单线程网络模型一直到Redis v6.0才改造成多线程模式, 但这并不意味着整个Redis一直都只是单线程. Redis在v4.0版本的时候就已经引入了的多线程来做一些异步操作, 此举主要针对的是那些非常耗时的命令, 通过将这些命令的执行进行异步化, 避免阻塞单线程的Event Loop. </p>
+<p>比如Redis的DEL命令是用来删除掉一个或多个key储存的值, 它是一个阻塞的命令, 大多数情况下要删除的key里存的值不会特别多, 最多也就几十上百个对象, 所以可以很快执行完, 但是如果你要删的是一个超大的键值对, 里面有几百万个对象, 那么这条命令可能会阻塞至少好几秒, 又因为Event Loop是单线程的, 所以会阻塞后面的其他事件, 导致吞吐量下降. </p>
+<p>Redis的作者antirez为了解决这个问题进行了很多思考, 一开始他想的办法是一种渐进式的方案: 利用定时器和数据游标, 每次只删除一小部分的数据, 比如1000个对象, 最终清除掉所有的数据, 但是这种方案有个致命的缺陷, 如果同时还有其他客户端往某个正在被渐进式删除的key里继续写入数据, 而且删除的速度跟不上写入的数据, 那么将会无止境地消耗内存, 虽然后来通过一个巧妙的办法解决了, 但是这种实现使Redis变得更加复杂, 而多线程看起来似乎是一个水到渠成的解决方案: 简单、易理解. 于是, 最终antirez选择引入多线程来实现这一类非阻塞的命令. 更多antirez在这方面的思考可以阅读一下<a href="http://antirez.com/news/93">他的博客</a>.</p>
+<p>因而, 在Redis v4.0之后增加了一些的非阻塞命令如<code>UNLINK</code>、<code>FLUSHALL ASYNC</code>、<code>FLUSHDB ASYNC</code>.</p>
+<p><img src="/images/redis/redis-async-commands.png" alt="" /></p>
+<p>如<code>UNLINK</code>命令其实就是DEL的异步版本, 它不会同步删除数据, 而只是把key从keyspace中暂时移除掉, 然后将任务添加到一个异步队列, 最后由后台线程去删除, 不过这里需要考虑一种情况是如果用<code>UNLINK</code>去删除一个很小的key, 用异步的方式去做反而开销更大, 所以它会先计算一个开销的阀值, 只有当这个值大于64才会使用异步的方式去删除key, 对于基本的数据类型如List、Set、Hash, 阀值就是其中存储的对象数量.</p>
+<h2 id="redisduo-xian-cheng-wang-luo-mo-xing-jie-shao">Redis多线程网络模型介绍</h2>
+<p>为什么Redis又要引入多线程呢？很简单, Redis网络I/O瓶颈日趋明显. 随着互联网的飞速发展, 互联网业务系统所要处理的线上流量越来越大, Redis的单线程模式会导致系统消耗很多CPU时间在网络I/O上从而降低吞吐量, 要提升Redis的性能有两个方向: </p>
+<ul>
+<li>优化网络I/O模块</li>
+<li>提高机器内存读写的速度</li>
+</ul>
+<p>后者依赖于硬件的发展, 暂时无解. 所以只能从前者下手, 网络I/O的优化又可以分为两个方向: </p>
+<ul>
+<li>零拷贝技术或者DPDK技术</li>
+<li>充分利用多核优势</li>
+</ul>
+<p>零拷贝技术有其局限性, 无法完全适配Redis这一类复杂网络I/O场景, 更多网络I/O对CPU时间的消耗和Linux零拷贝技术, 而DPDK技术通过旁路网卡I/O绕过内核协议栈的方式又太过于复杂以及需要内核甚至是硬件的支持. </p>
+<p>因此, 利用多核优势成为了优化网络I/O性价比最高的方案. 6.0版本之后,Redis正式在核心网络模型中引入了多线程, 也就是所谓的I/O Threading, 至此Redis真正拥有了多线程模型. Redis在6.0版本之前的单线程Event Loop模型, 实际上就是一个非常经典的Reactor模型: </p>
+<p><img src="/images/redis/single-reactor.png" alt="" /></p>
+<p>目前Linux平台上主流的高性能网络库/框架中, 大都采用Reactor模式, 比如netty、libevent、libuv、POE(Perl)、Twisted(Python)等. Reactor模式本质上指的是使用I/O多路复用(I/O multiplexing) + 非阻塞I/O(non-blocking I/O)的模式. </p>
+<p>Redis的核心网络模型在6.0版本之前, 一直是单Reactor模式: 所有事件的处理都在单个线程内完成, 虽然在4.0版本中引入了多线程, 但是那个更像是针对特定场景(如删除超大Key值等)而打的补丁, 并不能被视作核心网络模型的多线程. </p>
+<p>通常来说, 单Reactor模式, 引入多线程之后会进化为Multi-Reactors模式, 基本工作模式如下: </p>
+<p><img src="/images/redis/multi-reactors.png" alt="" /></p>
+<p>区别于单Reactor模式, 这种模式不再是单线程的Event Loop, 而是有多个线程(Sub Reactors)各自维护一个独立的Event Loop, 由Main Reactor负责接收新连接并分发给Sub Reactors去独立处理, 最后Sub Reactors回写响应给客户端. Multiple Reactors模式通常也可以等同于Master-Workers 模式, 比如Nginx和Memcached等就是采用这种多线程模型, 虽然不同的项目实现细节略有区别, 但总体来说模式是一致的. </p>
+<h3 id="she-ji-si-lu">设计思路</h3>
+<p>先看一下Redis多线程网络模型的总体设计: </p>
+<p><img src="/images/redis/multiple-threaded-redis.png" alt="" /></p>
+<ol>
+<li>
+<p>Redis服务器启动, 开启主线程事件循环(Event Loop), 注册<code>acceptTcpHandler</code>连接应答处理器到用户配置的监听端口对应的文件描述符, 等待新连接到来; </p>
+</li>
+<li>
+<p>客户端和服务端建立网络连接; </p>
+</li>
+<li>
+<p><code>acceptTcpHandler</code>被调用, 主线程使用AE的API将<code>readQueryFromClient</code>命令读取处理器绑定到新连接对应的文件描述符上, 并初始化一个client绑定这个客户端连接; </p>
+</li>
+<li>
+<p>客户端发送请求命令, 触发读就绪事件, 服务端主线程不会通过socket去读取客户端的请求命令, 而是先将client放入一个LIFO队列<code>clients_pending_read</code>; </p>
+</li>
+<li>
+<p>在Event Loop中, 主线程执行<code>beforeSleep</code>--&gt;<code>handleClientsWithPendingReadsUsingThreads</code>, 利用Round-Robin轮询负载均衡策略, 把 <code>clients_pending_rea</code>d队列中的连接均匀地分配给I/O线程各自的本地FIFO任务队列<code>io_threads_list[id]</code>和主线程自己, I/O线程通过socket读取客户端的请求命令, 存入<code>client-&gt;querybuf</code>并解析第一个命令, 但不执行命令, 主线程忙轮询, 等待所有I/O线程完成读取任务; </p>
+</li>
+<li>
+<p>主线程和所有I/O线程都完成了读取任务, 主线程结束忙轮询, 遍历<code>clients_pending_read</code>队列, 执行所有客户端连接的请求命令, 先调用<code>processCommandAndResetClient</code>执行第一条已经解析好的命令, 然后调用<code>processInputBuffer</code>解析并执行客户端连接的所有命令, 在其中使用<code>processInlineBuffer</code>或者<code>processMultibulkBuffer</code>根据Redis协议解析命令, 最后调用<code>processCommand</code>执行命令; </p>
+</li>
+<li>
+<p>根据请求命令的类型(SET, GET, DEL, EXEC等), 分配相应的命令执行器去执行, 最后调用<code>addReply</code>函数族的一系列函数将响应数据写入到对应client的写出缓冲区: <code>client-&gt;buf</code>或者<code>client-&gt;reply</code>, <code>client-&gt;buf</code>是首选的写出缓冲区, 固定大小16KB, 一般来说可以缓冲足够多的响应数据, 但是如果客户端在时间窗口内需要响应的数据非常大, 那么则会自动切换到<code>client-&gt;reply</code>链表上去, 使用链表理论上能够保存无限大的数据(受限于机器的物理内存), 最后把client添加进一个LIFO队列<code>clients_pending_write</code>; </p>
+</li>
+<li>
+<p>在Event Loop中, 主线程执行<code>beforeSleep</code>--&gt;<code>handleClientsWithPendingWritesUsingThreads</code>, 利用Round-Robin轮询负载均衡策略, 把 <code>clients_pending_write</code>队列中的连接均匀地分配给I/O线程各自的本地FIFO任务队列<code>io_threads_list[id]</code>和主线程自己,I/O线程通过调用<code>writeToClient</code>把client的写出缓冲区里的数据回写到客户端, 主线程忙轮询, 等待所有I/O线程完成写出任务; </p>
+</li>
+<li>
+<p>主线程和所有I/O线程都完成了写出任务,  主线程结束忙轮询, 遍历<code>clients_pending_write</code>队列, 如果client的写出缓冲区还有数据遗留, 则注册<code>sendReplyToClient</code>到该连接的写就绪事件, 等待客户端可写时在事件循环中再继续回写残余的响应数据.</p>
+</li>
+</ol>
+<p>这里大部分逻辑和之前的单线程模型是一致的, 变动的地方仅仅是把读取客户端请求命令和回写响应数据的逻辑异步化了, 交给I/O线程去完成, 这里需要特别注意的一点是:I/O线程仅仅是读取和解析客户端命令而不会真正去执行命令, 客户端命令的执行最终还是要在主线程上完成. </p>
+<h3 id="yuan-ma-pou-xi">源码剖析</h3>
+<p>以下源码解读基于Redis v6.0.10版本源码</p>
+<h4 id="duo-xian-cheng-chu-shi-hua">多线程初始化</h4>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">void </span><span style="color:#fad07a;">initThreadedIO</span><span>(</span><span style="color:#8fbfdc;">void</span><span>) {
+</span><span>    server.</span><span style="color:#ffb964;">io_threads_active </span><span>= </span><span style="color:#cf6a4c;">0</span><span>; </span><span style="color:#888888;">/* We start with threads not active. */
+</span><span>    </span><span style="color:#888888;">// 如果用户只配置了一个I/O线程, 则不会创建新线程(效率低), 直接在主线程里处理 I/O. 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(server.</span><span style="color:#ffb964;">io_threads_num </span><span>== </span><span style="color:#cf6a4c;">1</span><span>) </span><span style="color:#8fbfdc;">return</span><span>;
+</span><span> 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(server.</span><span style="color:#ffb964;">io_threads_num </span><span>&gt; IO_THREADS_MAX_NUM) {
+</span><span>        </span><span style="color:#ffb964;">serverLog</span><span>(LL_WARNING,</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">Fatal: too manyI/Othreads configured. </span><span style="color:#556633;">&quot;
+</span><span>                             </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">The maximum number is </span><span style="color:#7697d6;">%d</span><span style="color:#99ad6a;">.</span><span style="color:#556633;">&quot;</span><span>, IO_THREADS_MAX_NUM);
+</span><span>        exit(</span><span style="color:#cf6a4c;">1</span><span>);
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 根据用户配置的I/O线程数, 启动线程. 
+</span><span>    </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> i = </span><span style="color:#cf6a4c;">0</span><span>; i &lt; server.</span><span style="color:#ffb964;">io_threads_num</span><span>; i++) {
+</span><span>        </span><span style="color:#888888;">// 初始化I/O线程的本地任务队列. 
+</span><span>        io_threads_list[i] = </span><span style="color:#ffb964;">listCreate</span><span>();
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(i == </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">continue</span><span>; </span><span style="color:#888888;">// 线程 0 是主线程. 
+</span><span> 
+</span><span>        </span><span style="color:#888888;">// 初始化I/O线程并启动. 
+</span><span>        pthread_t tid;
+</span><span>        </span><span style="color:#888888;">// 每个I/O线程会分配一个本地锁, 用来休眠和唤醒线程. 
+</span><span>        </span><span style="color:#ffb964;">pthread_mutex_init</span><span>(&amp;io_threads_mutex[i],NULL);
+</span><span>        </span><span style="color:#888888;">// 每个I/O线程分配一个原子计数器, 用来记录当前遗留的任务数量. 
+</span><span>        io_threads_pending[i] = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>        </span><span style="color:#888888;">// 主线程在启动I/O线程的时候会默认先锁住它, 直到有I/O任务才唤醒它. 
+</span><span>        </span><span style="color:#ffb964;">pthread_mutex_lock</span><span>(&amp;io_threads_mutex[i]);
+</span><span>        </span><span style="color:#888888;">// 启动线程, 进入I/O线程的主逻辑函数 IOThreadMain. 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(</span><span style="color:#ffb964;">pthread_create</span><span>(&amp;tid,NULL,IOThreadMain,(</span><span style="color:#8fbfdc;">void</span><span>*)(</span><span style="color:#8fbfdc;">long</span><span>)i) != </span><span style="color:#cf6a4c;">0</span><span>) {
+</span><span>            </span><span style="color:#ffb964;">serverLog</span><span>(LL_WARNING,</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">Fatal: Can&#39;t initialize IO thread.</span><span style="color:#556633;">&quot;</span><span>);
+</span><span>            exit(</span><span style="color:#cf6a4c;">1</span><span>);
+</span><span>        }
+</span><span>        io_threads[i] = tid;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p><code>initThreadedIO</code>会在Redis服务器启动时的初始化工作的末尾被调用, 初始化I/O多线程并启动. </p>
+<blockquote>
+<p>Redis多线程模式默认是关闭的, 需用户在redis.conf配置文件中开启, 如</p>
+<pre data-lang="bash" style="background-color:#151515;color:#e8e8d3;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb964;">io-threads</span><span> 4
+</span><span style="color:#ffb964;">io-threads-do-reads</span><span> yes
+</span></code></pre>
+</blockquote>
+<h4 id="du-qu-qing-qiu">读取请求</h4>
+<p>当客户端发送请求命令之后, 会触发Redis主线程的事件循环, 命令处理器<code>readQueryFromClient</code>被回调, 在以前的单线程模型下, 这个方法会直接读取解析客户端命令并执行, 但是多线程模式下, 则会把client加入到<code>clients_pending_read</code>任务队列中去, 后面主线程再分配到I/O线程去读取客户端请求命令: </p>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">void </span><span style="color:#fad07a;">readQueryFromClient</span><span>(connection *</span><span style="color:#ffb964;">conn</span><span>) {
+</span><span>    client *c = </span><span style="color:#ffb964;">connGetPrivateData</span><span>(conn);
+</span><span>    </span><span style="color:#8fbfdc;">int</span><span> nread, readlen;
+</span><span>    size_t qblen;
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 检查是否开启了多线程, 如果是则把 client 加入异步队列之后返回. 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(</span><span style="color:#ffb964;">postponeClientRead</span><span>(c)) </span><span style="color:#8fbfdc;">return</span><span>;
+</span><span>    
+</span><span>    </span><span style="color:#888888;">// 略, 下面的代码逻辑和单线程版本几乎是一样的
+</span><span>    ... 
+</span><span>}
+</span><span> 
+</span><span style="color:#8fbfdc;">int </span><span style="color:#fad07a;">postponeClientRead</span><span>(client *</span><span style="color:#ffb964;">c</span><span>) {
+</span><span>    </span><span style="color:#888888;">// 当多线程I/O模式开启、主线程没有在处理阻塞任务时, 将 client 加入异步队列. 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(server.</span><span style="color:#ffb964;">io_threads_active </span><span>&amp;&amp;
+</span><span>        server.</span><span style="color:#ffb964;">io_threads_do_reads </span><span>&amp;&amp;
+</span><span>        !ProcessingEventsWhileBlocked &amp;&amp;
+</span><span>        !(c-&gt;flags &amp; (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ)))
+</span><span>    {
+</span><span>        </span><span style="color:#888888;">// 给 client 打上 CLIENT_PENDING_READ 标识, 表示该 client 需要被多线程处理, 
+</span><span>        </span><span style="color:#888888;">// 后续在I/O线程中会在读取和解析完客户端命令之后判断该标识并放弃执行命令, 让主线程去执行. 
+</span><span>        c-&gt;flags |= CLIENT_PENDING_READ;
+</span><span>        </span><span style="color:#ffb964;">listAddNodeHead</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>,c);
+</span><span>        </span><span style="color:#8fbfdc;">return </span><span style="color:#cf6a4c;">1</span><span>;
+</span><span>    } </span><span style="color:#8fbfdc;">else </span><span>{
+</span><span>        </span><span style="color:#8fbfdc;">return </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>接着主线程会在Event Loop的<code>beforeSleep()</code>方法中, 调用<code>handleClientsWithPendingReadsUsingThreads</code>: </p>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">int </span><span style="color:#fad07a;">handleClientsWithPendingReadsUsingThreads</span><span>(</span><span style="color:#8fbfdc;">void</span><span>) {
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(!server.</span><span style="color:#ffb964;">io_threads_active </span><span>|| !server.</span><span style="color:#ffb964;">io_threads_do_reads</span><span>) </span><span style="color:#8fbfdc;">return </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>    </span><span style="color:#8fbfdc;">int</span><span> processed = </span><span style="color:#ffb964;">listLength</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>);
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(processed == </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">return </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span> 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#7697d6;">%d</span><span style="color:#99ad6a;"> TOTAL READ pending clients\n</span><span style="color:#556633;">&quot;</span><span>, processed);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 遍历待读取的 client 队列 clients_pending_read, 
+</span><span>    </span><span style="color:#888888;">// 通过 RR 轮询均匀地分配给I/O线程和主线程自己(编号 0). 
+</span><span>    listIter li;
+</span><span>    listNode *ln;
+</span><span>    </span><span style="color:#ffb964;">listRewind</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>,&amp;li);
+</span><span>    </span><span style="color:#8fbfdc;">int</span><span> item_id = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>        </span><span style="color:#8fbfdc;">int</span><span> target_id = item_id % server.</span><span style="color:#ffb964;">io_threads_num</span><span>;
+</span><span>        </span><span style="color:#ffb964;">listAddNodeTail</span><span>(io_threads_list[target_id],c);
+</span><span>        item_id++;
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 设置当前I/O操作为读取操作, 给每个I/O线程的计数器设置分配的任务数量, 
+</span><span>    </span><span style="color:#888888;">// 让I/O线程可以开始工作: 只读取和解析命令, 不执行. 
+</span><span>    io_threads_op = IO_THREADS_OP_READ;
+</span><span>    </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> j = </span><span style="color:#cf6a4c;">1</span><span>; j &lt; server.</span><span style="color:#ffb964;">io_threads_num</span><span>; j++) {
+</span><span>        </span><span style="color:#8fbfdc;">int</span><span> count = </span><span style="color:#ffb964;">listLength</span><span>(io_threads_list[j]);
+</span><span>        io_threads_pending[j] = count;
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 主线程自己也会去执行读取客户端请求命令的任务, 以达到最大限度利用 CPU. 
+</span><span>    </span><span style="color:#ffb964;">listRewind</span><span>(io_threads_list[</span><span style="color:#cf6a4c;">0</span><span>],&amp;li);
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>        </span><span style="color:#ffb964;">readQueryFromClient</span><span>(c-&gt;conn);
+</span><span>    }
+</span><span>    </span><span style="color:#ffb964;">listEmpty</span><span>(io_threads_list[</span><span style="color:#cf6a4c;">0</span><span>]);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 忙轮询, 累加所有I/O线程的原子任务计数器, 直到所有计数器的遗留任务数量都是 0, 
+</span><span>    </span><span style="color:#888888;">// 表示所有任务都已经执行完成, 结束轮询. 
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>(</span><span style="color:#cf6a4c;">1</span><span>) {
+</span><span>        </span><span style="color:#8fbfdc;">unsigned long</span><span> pending = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>        </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> j = </span><span style="color:#cf6a4c;">1</span><span>; j &lt; server.</span><span style="color:#ffb964;">io_threads_num</span><span>; j++)
+</span><span>            pending += io_threads_pending[j];
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(pending == </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">I/O READ All threads finshed\n</span><span style="color:#556633;">&quot;</span><span>);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 遍历待读取的 client 队列, 清除 CLIENT_PENDING_READ 和 CLIENT_PENDING_COMMAND 标记, 
+</span><span>    </span><span style="color:#888888;">// 然后解析并执行所有 client 的命令. 
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>(</span><span style="color:#ffb964;">listLength</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>)) {
+</span><span>        ln = </span><span style="color:#ffb964;">listFirst</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>);
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>        c-&gt;flags &amp;= ~CLIENT_PENDING_READ;
+</span><span>        </span><span style="color:#ffb964;">listDelNode</span><span>(server.</span><span style="color:#ffb964;">clients_pending_read</span><span>,ln);
+</span><span> 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;flags &amp; CLIENT_PENDING_COMMAND) {
+</span><span>            c-&gt;flags &amp;= ~CLIENT_PENDING_COMMAND;
+</span><span>            </span><span style="color:#888888;">// client 的第一条命令已经被解析好了, 直接尝试执行. 
+</span><span>            </span><span style="color:#8fbfdc;">if </span><span>(</span><span style="color:#ffb964;">processCommandAndResetClient</span><span>(c) == C_ERR) {
+</span><span>                </span><span style="color:#888888;">/* If the client is no longer valid, we avoid
+</span><span style="color:#888888;">                 * processing the client later. So we just go
+</span><span style="color:#888888;">                 * to the next. */
+</span><span>                </span><span style="color:#8fbfdc;">continue</span><span>;
+</span><span>            }
+</span><span>        }
+</span><span>        </span><span style="color:#ffb964;">processInputBuffer</span><span>(c); </span><span style="color:#888888;">// 继续解析并执行 client 命令. 
+</span><span> 
+</span><span>        </span><span style="color:#888888;">// 命令执行完成之后, 如果 client 中有响应数据需要回写到客户端, 则将 client 加入到待写出队列 clients_pending_write
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(!(c-&gt;flags &amp; CLIENT_PENDING_WRITE) &amp;&amp; </span><span style="color:#ffb964;">clientHasPendingReplies</span><span>(c))
+</span><span>            </span><span style="color:#ffb964;">clientInstallWriteHandler</span><span>(c);
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">/* Update processed count on server */
+</span><span>    server.</span><span style="color:#ffb964;">stat_io_reads_processed </span><span>+= processed;
+</span><span>    </span><span style="color:#8fbfdc;">return</span><span> processed;
+</span><span>}
+</span></code></pre>
+<p>此处的核心工作为: </p>
+<ul>
+<li>遍历待读取的Client队列<code>clients_pending_read</code>, 通过RR策略把所有任务分配给I/O线程和主线程去读取和解析客户端命令. </li>
+<li>忙轮询等待所有I/O线程完成任务. </li>
+<li>最后再遍历<code>clients_pending_read</code>, 执行所有client的命令. </li>
+</ul>
+<h4 id="xie-hui-xiang-ying">写回响应</h4>
+<p>完成命令的读取、解析以及执行之后, 客户端命令的响应数据已经存入<code>client-&gt;buf</code>或者<code>client-&gt;reply</code>中了, 接下来就需要把响应数据回写到客户端了, 还是在<code>beforeSleep</code>中, 主线程调用<code>handleClientsWithPendingWritesUsingThreads</code></p>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">int </span><span style="color:#fad07a;">handleClientsWithPendingWritesUsingThreads</span><span>(</span><span style="color:#8fbfdc;">void</span><span>) {
+</span><span>    </span><span style="color:#8fbfdc;">int</span><span> processed = </span><span style="color:#ffb964;">listLength</span><span>(server.</span><span style="color:#ffb964;">clients_pending_write</span><span>);
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(processed == </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">return </span><span style="color:#cf6a4c;">0</span><span>; </span><span style="color:#888888;">/* Return ASAP if there are no clients. */
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 如果用户设置的I/O线程数等于 1 或者当前 clients_pending_write 队列中待写出的 client
+</span><span>    </span><span style="color:#888888;">// 数量不足I/O线程数的两倍, 则不用多线程的逻辑, 让所有I/O线程进入休眠, 
+</span><span>    </span><span style="color:#888888;">// 直接在主线程把所有 client 的相应数据回写到客户端. 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(server.</span><span style="color:#ffb964;">io_threads_num </span><span>== </span><span style="color:#cf6a4c;">1 </span><span>|| </span><span style="color:#ffb964;">stopThreadedIOIfNeeded</span><span>()) {
+</span><span>        </span><span style="color:#8fbfdc;">return </span><span style="color:#ffb964;">handleClientsWithPendingWrites</span><span>();
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 唤醒正在休眠的I/O线程(如果有的话). 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(!server.</span><span style="color:#ffb964;">io_threads_active</span><span>) </span><span style="color:#ffb964;">startThreadedIO</span><span>();
+</span><span> 
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#7697d6;">%d</span><span style="color:#99ad6a;"> TOTAL WRITE pending clients\n</span><span style="color:#556633;">&quot;</span><span>, processed);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 遍历待写出的 client 队列 clients_pending_write, 
+</span><span>    </span><span style="color:#888888;">// 通过 RR 轮询均匀地分配给I/O线程和主线程自己(编号 0). 
+</span><span>    listIter li;
+</span><span>    listNode *ln;
+</span><span>    </span><span style="color:#ffb964;">listRewind</span><span>(server.</span><span style="color:#ffb964;">clients_pending_write</span><span>,&amp;li);
+</span><span>    </span><span style="color:#8fbfdc;">int</span><span> item_id = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>        c-&gt;flags &amp;= ~CLIENT_PENDING_WRITE;
+</span><span> 
+</span><span>        </span><span style="color:#888888;">/* Remove clients from the list of pending writes since
+</span><span style="color:#888888;">         * they are going to be closed ASAP. */
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;flags &amp; CLIENT_CLOSE_ASAP) {
+</span><span>            </span><span style="color:#ffb964;">listDelNode</span><span>(server.</span><span style="color:#ffb964;">clients_pending_write</span><span>, ln);
+</span><span>            </span><span style="color:#8fbfdc;">continue</span><span>;
+</span><span>        }
+</span><span> 
+</span><span>        </span><span style="color:#8fbfdc;">int</span><span> target_id = item_id % server.</span><span style="color:#ffb964;">io_threads_num</span><span>;
+</span><span>        </span><span style="color:#ffb964;">listAddNodeTail</span><span>(io_threads_list[target_id],c);
+</span><span>        item_id++;
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 设置当前I/O操作为写出操作, 给每个I/O线程的计数器设置分配的任务数量, 
+</span><span>    </span><span style="color:#888888;">// 让I/O线程可以开始工作, 把写出缓冲区(client-&gt;buf 或 c-&gt;reply)中的响应数据回写到客户端. 
+</span><span>    io_threads_op = IO_THREADS_OP_WRITE;
+</span><span>    </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> j = </span><span style="color:#cf6a4c;">1</span><span>; j &lt; server.</span><span style="color:#ffb964;">io_threads_num</span><span>; j++) {
+</span><span>        </span><span style="color:#8fbfdc;">int</span><span> count = </span><span style="color:#ffb964;">listLength</span><span>(io_threads_list[j]);
+</span><span>        io_threads_pending[j] = count;
+</span><span>    }
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 主线程自己也会去执行写数据到客户端的任务, 以达到最大限度利用 CPU. 
+</span><span>    </span><span style="color:#ffb964;">listRewind</span><span>(io_threads_list[</span><span style="color:#cf6a4c;">0</span><span>],&amp;li);
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>        </span><span style="color:#ffb964;">writeToClient</span><span>(c,</span><span style="color:#cf6a4c;">0</span><span>);
+</span><span>    }
+</span><span>    </span><span style="color:#ffb964;">listEmpty</span><span>(io_threads_list[</span><span style="color:#cf6a4c;">0</span><span>]);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 忙轮询, 累加所有I/O线程的原子任务计数器, 直到所有计数器的遗留任务数量都是 0. 
+</span><span>    </span><span style="color:#888888;">// 表示所有任务都已经执行完成, 结束轮询. 
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>(</span><span style="color:#cf6a4c;">1</span><span>) {
+</span><span>        </span><span style="color:#8fbfdc;">unsigned long</span><span> pending = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span>        </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> j = </span><span style="color:#cf6a4c;">1</span><span>; j &lt; server.</span><span style="color:#ffb964;">io_threads_num</span><span>; j++)
+</span><span>            pending += io_threads_pending[j];
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(pending == </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span>    }
+</span><span>    </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">I/O WRITE All threads finshed\n</span><span style="color:#556633;">&quot;</span><span>);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">// 最后再遍历一次 clients_pending_write 队列, 检查是否还有 client 的写出缓冲区中有残留数据, 
+</span><span>    </span><span style="color:#888888;">// 如果有, 那就为 client 注册一个命令回复器 sendReplyToClient, 等待客户端写就绪再继续把数据回写. 
+</span><span>    </span><span style="color:#ffb964;">listRewind</span><span>(server.</span><span style="color:#ffb964;">clients_pending_write</span><span>,&amp;li);
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>        client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span> 
+</span><span>        </span><span style="color:#888888;">// 检查 client 的写出缓冲区是否还有遗留数据. 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(</span><span style="color:#ffb964;">clientHasPendingReplies</span><span>(c) &amp;&amp;
+</span><span>                </span><span style="color:#ffb964;">connSetWriteHandler</span><span>(c-&gt;conn, sendReplyToClient) == AE_ERR)
+</span><span>        {
+</span><span>            </span><span style="color:#ffb964;">freeClientAsync</span><span>(c);
+</span><span>        }
+</span><span>    }
+</span><span>    </span><span style="color:#ffb964;">listEmpty</span><span>(server.</span><span style="color:#ffb964;">clients_pending_write</span><span>);
+</span><span> 
+</span><span>    </span><span style="color:#888888;">/* Update processed count on server */
+</span><span>    server.</span><span style="color:#ffb964;">stat_io_writes_processed </span><span>+= processed;
+</span><span>    </span><span style="color:#8fbfdc;">return</span><span> processed;
+</span><span>}
+</span></code></pre>
+<p>此处的核心工作是: </p>
+<ul>
+<li>检查当前任务负载, 如果当前的任务数量不足以用多线程模式处理的话, 则休眠I/O线程并且直接同步将响应数据回写到客户端. </li>
+<li>唤醒正在休眠的I/O线程(如果有的话). </li>
+<li>遍历待写出的client队列<code>clients_pending_write</code>, 通过RR策略把所有任务分配给I/O线程和主线程去将响应数据写回到客户端. </li>
+<li>忙轮询等待所有I/O线程完成任务. </li>
+<li>最后再遍历<code>clients_pending_write</code>, 为那些还残留有响应数据的client注册命令回复处理器<code>sendReplyToClient</code>, 等待客户端可写之后在Event Loop中继续回写残余的响应数据.</li>
+</ul>
+<h4 id="i-oxian-cheng-zhu-luo-ji">I/O线程主逻辑</h4>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">void </span><span>*</span><span style="color:#fad07a;">IOThreadMain</span><span>(</span><span style="color:#8fbfdc;">void </span><span>*</span><span style="color:#ffb964;">myid</span><span>) {
+</span><span>    </span><span style="color:#888888;">/* The ID is the thread number (from 0 to server.iothreads_num-1), and is
+</span><span style="color:#888888;">     * used by the thread to just manipulate a single sub-array of clients. */
+</span><span>    </span><span style="color:#8fbfdc;">long</span><span> id = (</span><span style="color:#8fbfdc;">unsigned long</span><span>)myid;
+</span><span>    </span><span style="color:#8fbfdc;">char</span><span> thdname[</span><span style="color:#cf6a4c;">16</span><span>];
+</span><span> 
+</span><span>    snprintf(thdname, sizeof(thdname), </span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">io_thd_</span><span style="color:#7697d6;">%ld</span><span style="color:#556633;">&quot;</span><span>, id);
+</span><span>    </span><span style="color:#ffb964;">redis_set_thread_title</span><span>(thdname);
+</span><span>    </span><span style="color:#888888;">// 设置I/O线程的 CPU 亲和性, 尽可能将I/O线程(以及主线程, 不在这里设置)绑定到用户配置的
+</span><span>    </span><span style="color:#888888;">// CPU 列表上. 
+</span><span>    </span><span style="color:#ffb964;">redisSetCpuAffinity</span><span>(server.</span><span style="color:#ffb964;">server_cpulist</span><span>);
+</span><span>    </span><span style="color:#ffb964;">makeThreadKillable</span><span>();
+</span><span> 
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>(</span><span style="color:#cf6a4c;">1</span><span>) {
+</span><span>        </span><span style="color:#888888;">// 忙轮询, 100w 次循环, 等待主线程分配I/O任务. 
+</span><span>        </span><span style="color:#8fbfdc;">for </span><span>(</span><span style="color:#8fbfdc;">int</span><span> j = </span><span style="color:#cf6a4c;">0</span><span>; j &lt; </span><span style="color:#cf6a4c;">1000000</span><span>; j++) {
+</span><span>            </span><span style="color:#8fbfdc;">if </span><span>(io_threads_pending[id] != </span><span style="color:#cf6a4c;">0</span><span>) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span>        }
+</span><span> 
+</span><span>        </span><span style="color:#888888;">// 如果 100w 次忙轮询之后如果还是没有任务分配给它, 则通过尝试加锁进入休眠, 
+</span><span>        </span><span style="color:#888888;">// 等待主线程分配任务之后调用 startThreadedIO 解锁, 唤醒I/O线程去执行. 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(io_threads_pending[id] == </span><span style="color:#cf6a4c;">0</span><span>) {
+</span><span>            </span><span style="color:#ffb964;">pthread_mutex_lock</span><span>(&amp;io_threads_mutex[id]);
+</span><span>            </span><span style="color:#ffb964;">pthread_mutex_unlock</span><span>(&amp;io_threads_mutex[id]);
+</span><span>            </span><span style="color:#8fbfdc;">continue</span><span>;
+</span><span>        }
+</span><span> 
+</span><span>        </span><span style="color:#ffb964;">serverAssert</span><span>(io_threads_pending[id] != </span><span style="color:#cf6a4c;">0</span><span>);
+</span><span> 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">[</span><span style="color:#7697d6;">%ld</span><span style="color:#99ad6a;">] </span><span style="color:#7697d6;">%d</span><span style="color:#99ad6a;"> to handle\n</span><span style="color:#556633;">&quot;</span><span>, id, (</span><span style="color:#8fbfdc;">int</span><span>)</span><span style="color:#ffb964;">listLength</span><span>(io_threads_list[id]));
+</span><span> 
+</span><span> 
+</span><span>        </span><span style="color:#888888;">// 注意: 主线程分配任务给I/O线程之时, 
+</span><span>        </span><span style="color:#888888;">// 会把任务加入每个线程的本地任务队列 io_threads_list[id], 
+</span><span>        </span><span style="color:#888888;">// 但是当I/O线程开始执行任务之后, 主线程就不会再去访问这些任务队列, 避免数据竞争. 
+</span><span>        listIter li;
+</span><span>        listNode *ln;
+</span><span>        </span><span style="color:#ffb964;">listRewind</span><span>(io_threads_list[id],&amp;li);
+</span><span>        </span><span style="color:#8fbfdc;">while</span><span>((ln = </span><span style="color:#ffb964;">listNext</span><span>(&amp;li))) {
+</span><span>            client *c = </span><span style="color:#ffb964;">listNodeValue</span><span>(ln);
+</span><span>            </span><span style="color:#888888;">// 如果当前是写出操作, 则把 client 的写出缓冲区中的数据回写到客户端. 
+</span><span>            </span><span style="color:#8fbfdc;">if </span><span>(io_threads_op == IO_THREADS_OP_WRITE) {
+</span><span>                </span><span style="color:#ffb964;">writeToClient</span><span>(c,</span><span style="color:#cf6a4c;">0</span><span>);
+</span><span>              </span><span style="color:#888888;">// 如果当前是读取操作, 则socket 读取客户端的请求命令并解析第一条命令. 
+</span><span>            } </span><span style="color:#8fbfdc;">else if </span><span>(io_threads_op == IO_THREADS_OP_READ) {
+</span><span>                </span><span style="color:#ffb964;">readQueryFromClient</span><span>(c-&gt;conn);
+</span><span>            } </span><span style="color:#8fbfdc;">else </span><span>{
+</span><span>                </span><span style="color:#ffb964;">serverPanic</span><span>(</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">io_threads_op value is unknown</span><span style="color:#556633;">&quot;</span><span>);
+</span><span>            }
+</span><span>        }
+</span><span>        </span><span style="color:#ffb964;">listEmpty</span><span>(io_threads_list[id]);
+</span><span>        </span><span style="color:#888888;">// 所有任务执行完之后把自己的计数器置 0, 主线程通过累加所有I/O线程的计数器
+</span><span>        </span><span style="color:#888888;">// 判断是否所有I/O线程都已经完成工作. 
+</span><span>        io_threads_pending[id] = </span><span style="color:#cf6a4c;">0</span><span>;
+</span><span> 
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(tio_debug) printf(</span><span style="color:#556633;">&quot;</span><span style="color:#99ad6a;">[</span><span style="color:#7697d6;">%ld</span><span style="color:#99ad6a;">] Done\n</span><span style="color:#556633;">&quot;</span><span>, id);
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>I/O线程启动之后, 会先进入忙轮询, 判断原子计数器中的任务数量, 如果是非0则表示主线程已经给它分配了任务, 开始执行任务, 否则就一直忙轮询一百万次等待, 忙轮询结束之后再查看计数器, 如果还是0, 则尝试加本地锁, 因为主线程在启动I/O线程之时就已经提前锁住了所有I/O线程的本地锁, 因此I/O线程会进行休眠, 等待主线程唤醒. </p>
+<p>主线程会在每次事件循环中尝试调用<code>startThreadedIO</code>唤醒I/O线程去执行任务, 如果接收到客户端请求命令, 则I/O线程会被唤醒开始工作, 根据主线程设置的<code>io_threads_op</code>标识去执行命令读取和解析或者回写响应数据的任务,I/O线程在收到主线程通知之后, 会遍历自己的本地任务队列<code>io_threads_list[id]</code>, 取出一个个client执行任务: </p>
+<ul>
+<li>如果当前是写出操作, 则调用<code>writeToClient</code>, 通过socket把<code>client-&gt;buf</code>或者<code>client-&gt;reply</code>里的响应数据回写到客户端. </li>
+<li>如果当前是读取操作, 则调用<code>readQueryFromClient</code>, 通过 socket 读取客户端命令, 存入<code>client-&gt;querybuf</code>, 然后调用<code>processInputBuffer</code>去解析命令, 这里最终只会解析到第一条命令, 然后就结束, 不会去执行命令. </li>
+<li>在全部任务执行完之后把自己的原子计数器置0, 以告知主线程自己已经完成了工作. </li>
+</ul>
+<pre data-lang="c" style="background-color:#151515;color:#e8e8d3;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#8fbfdc;">void </span><span style="color:#fad07a;">processInputBuffer</span><span>(client *</span><span style="color:#ffb964;">c</span><span>) {
+</span><span>    </span><span style="color:#888888;">// 略
+</span><span>    </span><span style="color:#8fbfdc;">while</span><span>(c-&gt;qb_pos &lt; </span><span style="color:#ffb964;">sdslen</span><span>(c-&gt;querybuf)) {
+</span><span>        </span><span style="color:#888888;">/* Return if clients are paused. */
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(!(c-&gt;flags &amp; CLIENT_SLAVE) &amp;&amp; </span><span style="color:#ffb964;">clientsArePaused</span><span>()) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span> 
+</span><span>        </span><span style="color:#888888;">/* Immediately abort if the client is in the middle of something. */
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;flags &amp; CLIENT_BLOCKED) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span> 
+</span><span>        </span><span style="color:#888888;">/* Don&#39;t process more buffers from clients that have already pending
+</span><span style="color:#888888;">         * commands to execute in c-&gt;argv. */
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;flags &amp; CLIENT_PENDING_COMMAND) </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span>        </span><span style="color:#888888;">/* Multibulk processing could see a &lt;= 0 length. */
+</span><span>        </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;argc == </span><span style="color:#cf6a4c;">0</span><span>) {
+</span><span>            </span><span style="color:#ffb964;">resetClient</span><span>(c);
+</span><span>        } </span><span style="color:#8fbfdc;">else </span><span>{
+</span><span>            </span><span style="color:#888888;">// 判断 client 是否具有 CLIENT_PENDING_READ 标识, 如果是处于多线程I/O的模式下, 
+</span><span>            </span><span style="color:#888888;">// 那么此前已经在 readQueryFromClient -&gt; postponeClientRead 中为 client 打上该标识, 
+</span><span>            </span><span style="color:#888888;">// 则立刻跳出循环结束, 此时第一条命令已经解析完成, 但是不执行命令. 
+</span><span>            </span><span style="color:#8fbfdc;">if </span><span>(c-&gt;flags &amp; CLIENT_PENDING_READ) {
+</span><span>                c-&gt;flags |= CLIENT_PENDING_COMMAND;
+</span><span>                </span><span style="color:#8fbfdc;">break</span><span>;
+</span><span>            }
+</span><span> 
+</span><span>            </span><span style="color:#888888;">// 执行客户端命令
+</span><span>            </span><span style="color:#8fbfdc;">if </span><span>(</span><span style="color:#ffb964;">processCommandAndResetClient</span><span>(c) == C_ERR) {
+</span><span>                </span><span style="color:#888888;">/* If the client is no longer valid, we avoid exiting this
+</span><span style="color:#888888;">                 * loop and trimming the client buffer later. So we return
+</span><span style="color:#888888;">                 * ASAP in that case. */
+</span><span>                </span><span style="color:#8fbfdc;">return</span><span>;
+</span><span>            }
+</span><span>        }
+</span><span>    }
+</span><span>    </span><span style="color:#888888;">// ... 略
+</span><span>}
+</span></code></pre>
+<p>这里需要额外关注I/O线程初次启动时会设置当前线程的CPU亲和性, 也就是绑定当前线程到用户配置的CPU上, 在启动Redis服务器主线程的时候同样会设置CPU亲和性, Redis的核心网络模型引入多线程之后, 加上之前的多线程异步任务、多进程(BGSAVE、AOF、BIO、Sentinel 脚本任务等), Redis现如今的系统并发度已经很大了, 而Redis本身又是一个对吞吐量和延迟极度敏感的系统, 所以用户需要Redis对CPU资源有更细粒度的控制, 这里主要考虑的是两方面: CPU高速缓存和NUMA架构. </p>
+<p>首先是CPU高速缓存(这里讨论的是L1 Cache和L2 Cache都集成CPU中的硬件架构), 这里想象一种场景: Redis主进程正在CPU-1上运行, 给客户端提供数据服务, 此时Redis启动了子进程进行数据持久化(BGSAVE 或者 AOF), 系统调度之后子进程抢占了主进程的CPU-1, 主进程被调度到CPU-2上去运行, 导致之前CPU-1的高速缓存里的相关指令和数据被汰换掉, CPU-2需要重新加载指令和数据到自己的本地高速缓存里, 浪费CPU资源, 降低性能. </p>
+<p><img src="/images/redis/cpu-cache-levels.png" alt="" /></p>
+<p>因此, Redis通过设置CPU亲和性, 可以将主进程/线程和子进程/线程绑定到不同的核隔离开来, 使之互不干扰, 能有效地提升系统性能. 其次是基于NUMA架构的考虑, 在NUMA体系下, 内存控制器芯片被集成到处理器内部, 形成CPU本地内存, 访问本地内存只需通过内存通道而无需经过系统总线, 访问时延大大降低, 而多个处理器之间通过QPI数据链路互联, 跨NUMA节点的内存访问开销远大于本地内存的访问: </p>
+<p><img src="/images/redis/qpi-arch.png" alt="" /></p>
+<p>因此,Redis通过设置CPU亲和性, 让主进程/线程尽可能在固定的NUMA节点上的CPU上运行, 更多地使用本地内存而不需要跨节点访问数据, 同样也能大大地提升性能. </p>
+<p>最后还有一点, 阅读过源码的读者可能会有疑问, Redis多线程模式下, 似乎并没有对数据进行锁保护, 事实上Redis的多线程模型是全程无锁(Lock-free)的, 这是通过原子操作+交错访问来实现的, 主线程和I/O线程之间共享的变量有三个: <code>io_threads_pending</code>计数器、<code>io_threads_op</code> I/O标识符和<code>io_threads_list</code>线程本地任务队列. </p>
+<p><img src="/images/redis/lock-free.png" alt="" /></p>
+<p><code>io_threads_pending</code>是原子变量, 不需要加锁保护, <code>io_threads_op</code>和<code>io_threads_list</code>这两个变量则是通过控制主线程和I/O线程交错访问来规避共享数据竞争问题: I/O线程启动之后会通过忙轮询和锁休眠等待主线程的信号, 在这之前它不会去访问自己的本地任务队列<code>io_threads_list[id]</code>, 而主线程会在分配完所有任务到各个I/O线程的本地队列之后才去唤醒 I/O线程开始工作, 并且主线程之后在I/O线程运行期间只会访问自己的本地任务队列<code>io_threads_list[0]</code>而不会再去访问I/O线程的本地队列, 这也就保证了主线程永远会在I/O线程之前访问<code>io_threads_list</code>并且之后不再访问, 保证了交错访问. <code>io_threads_op</code>同理, 主线程会在唤醒I/O线程之前先设置好<code>io_threads_op</code>的值, 并且在I/O线程运行期间不会再去访问这个变量. </p>
+<h3 id="xing-neng-you-ti-sheng-ma">性能有提升吗?</h3>
+<p>Redis 将核心网络模型改造成多线程模式, 追求的自然是最终性能上的提升, 废话不多说, 直接上数据: </p>
+<p><img src="/images/redis/bench-no-pipeline.png" alt="" /></p>
+<p>测试数据表明, Redis在使用多线程模式之后性能大幅提升, 达到了一倍. 更详细的性能压测数据可以参阅<a href="https://itnext.io/benchmarking-the-experimental-redis-multi-threaded-i-o-1bb28b69a314">这篇文章</a>. 以下是美图技术团队实测的新旧Redis版本性能对比图, 仅供参考: </p>
+<p><img src="/images/redis/bench-set.jpg" alt="" /></p>
+<p><img src="/images/redis/bench-get.jpg" alt="" /></p>
+<h3 id="bu-zu-zhi-chu">不足之处</h3>
+<p>Redis的多线程网络模型<strong>实际上并不是一个标准的Multi-Reactors/Master-Workers模型, 和其他主流的开源网络服务器的模式有所区别</strong>, 最大的不同就是在标准的Multi-Reactors/Master-Workers模式下, Sub Reactors/Workers会完成<strong>网络读 -&gt; 数据解析 -&gt; 命令执行 -&gt; 网络写</strong>整套流程, Main Reactor/Master只负责分派任务, 而在Redis的多线程方案中, I/O线程任务仅仅是通过socket读取客户端请求命令并解析, 却没有真正去执行命令, 所有客户端命令最后还需要回到主线程去执行, 因此<strong>对多核的利用率并不算高</strong>, 而且每次主线程都必须在分配完任务之后忙轮询等待所有I/O线程完成任务之后才能继续执行其他逻辑. </p>
+<p>Redis之所以如此设计它的多线程网络模型, 个人认为主要原因是为了保持兼容性, 之前版本的Redis单线程, 所有的客户端命令都是在单线程的Event Loop里执行, 因而Redis里所有的数据结构都是非线程安全的, 现在引入多线程, 如果按照标准的Multi-Reactors/Master-Workers模式来实现, 则所有内置的数据结构都必须重构成线程安全的, 工作量大而且麻烦. </p>
+<p>个人认为, Redis目前的多线程方案更像是一个折中的选择: 既保持了原系统的兼容性, 又能利用多核提升I/O性能. 其次, 目前Redis的多线程模型中, 主线程和I/O线程的通信过于简单粗暴: 忙轮询和锁, 因为通过自旋忙轮询进行等待, 导致Redis在启动的时候以及运行期间偶尔会有短暂的CPU空转引起的高占用率, 且目前该通信机制的实现看起来非常不直观和不简洁, 希望后面Redis能对目前的方案加以改进. </p>
+<blockquote>
+<p>读到这里, 对于本文开篇的那个问题, 聪明的你兴许早已有了答案, 对不?</p>
+</blockquote>
+<h2 id="xiao-jie">小结</h2>
+<p>Redis自2009年发布第一版之后, 其单线程网络模型的选择在社区中从未停止过讨论, 多年来一直有呼声希望Redis能引入多线程从而利用多核优势, 但作者antirez是一个追求大道至简的开发者, 对Redis加入任何新功能都异常谨慎, 所以在Redis初版发布的十年后才最终将Redis的核心网络模型改造成多线程模式, 这期间甚至诞生了一些Redis多线程的替代项目. 虽然antirez一直在推迟多线程的方案, 但却从未停止思考多线程的可行性, Redis多线程网络模型的改造不是一朝一夕的事情,这其中牵扯到项目的方方面面,所以目前Redis的方案也并不完美, 没有采用主流的多线程模式设计. </p>
+<p>最后, 再来回顾一下Redis多线程网络模型的设计方案: </p>
+<ul>
+<li>使用I/O线程实现网络I/O多线程化, <strong>I/O线程只负责网络I/O和命令解析, 不执行客户端命令</strong>. </li>
+<li>利用<strong>原子操作+交错访问实现无锁的多线程模型</strong>. </li>
+<li>通过设置<strong>CPU亲和性</strong>, 隔离主进程和其他子进程, 充分利用多线程网络模型实现性能最大化. </li>
+</ul>
+
+        </div>
+
+        
+    </div>
+
+    </div>
+
+    
+    <footer class="footer">
+        <div class="footer__inner">
+                <div class="copyright">
+                        <span>© 
+    2022
+ Powered by <a href="https://www.rust-lang.org/">Rust</a></span>
+                    <span class="copyright-theme">
+                        <span class="copyright-theme-sep">:: </span>
+                        Theme :: Dark Tencent (鹅厂暗无天日)
+                    </span>
+                </div>
+            </div>
+    </footer>
+    
+
+</div>
+</body>
+
+</html>
